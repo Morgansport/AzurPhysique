@@ -49,6 +49,18 @@ def get_secret(name):
 SUPA_URL=get_secret("SUPABASE_URL").rstrip("/")
 SUPA_KEY=get_secret("SUPABASE_SERVICE_ROLE_KEY")
 REMOTE=bool(SUPA_URL and SUPA_KEY)
+SECRET_WARNING = ""
+if not REMOTE:
+    if SUPA_URL and get_secret("SUPABASE_KEY") and not SUPA_KEY:
+        SECRET_WARNING = ("Tu as renseigné SUPABASE_KEY, mais le code attend "
+                          "SUPABASE_SERVICE_ROLE_KEY. Renomme cette entrée dans "
+                          "Streamlit → Manage app → Settings → Secrets (avec la clé serveur).")
+    elif SUPA_URL and not SUPA_KEY:
+        SECRET_WARNING = "Il manque SUPABASE_SERVICE_ROLE_KEY dans les Secrets Streamlit."
+    elif SUPA_KEY and not SUPA_URL:
+        SECRET_WARNING = "Il manque SUPABASE_URL dans les Secrets Streamlit."
+    else:
+        SECRET_WARNING = "Les Secrets Supabase ne sont pas configurés pour cette application."
 API=f"{SUPA_URL}/rest/v1/tennis_dashboard_state"
 HEADERS={"apikey":SUPA_KEY,"Authorization":f"Bearer {SUPA_KEY}","Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=minimal"}
 
@@ -85,8 +97,12 @@ def save_remote(data):
     r=requests.post(API,headers=HEADERS,json={"id":"main","content":data},timeout=12)
     r.raise_for_status()
 
-if "data" not in st.session_state:
-    try: st.session_state.data=load_remote() if REMOTE else migrate(EMPTY_DATA)
+# Réinitialise la connexion si les paramètres changent entre deux sessions Streamlit.
+BACKEND_ID = (SUPA_URL, bool(SUPA_KEY))
+if "data" not in st.session_state or st.session_state.get("backend_id") != BACKEND_ID:
+    try:
+        st.session_state.data = load_remote() if REMOTE else migrate(EMPTY_DATA)
+        st.session_state.backend_id = BACKEND_ID
     except requests.RequestException as e:
         st.error(f"Impossible de charger les données : {e}")
         st.stop()
@@ -123,15 +139,35 @@ with st.sidebar:
                 st.rerun()
     else:
         st.session_state.editor=True
-        st.info("Mode démo : toute personne avec le lien peut modifier les données de sa session.")
+        st.warning("Aucun mot de passe édition : toute personne ayant accès à l’application peut modifier les fiches. Configure EDIT_PASSWORD avant le partage.")
     if REMOTE:
-        st.success("Sauvegarde Supabase active")
-        if st.button("🔄 Actualiser"):
-            st.session_state.data=load_remote()
-            st.rerun()
+        st.success("Supabase configuré — stockage distant disponible")
+        if st.button("🔎 Vérifier la connexion à la base"):
+            try:
+                response = requests.get(API, headers=HEADERS,
+                                        params={"id":"eq.main","select":"id,updated_at"}, timeout=12)
+                response.raise_for_status()
+                rows = response.json()
+                if rows:
+                    st.success("Connexion OK : une sauvegarde existe dans Supabase.")
+                    st.caption("Dernière sauvegarde : " + str(rows[0].get("updated_at", "inconnue")))
+                else:
+                    st.warning("Connexion OK, mais aucune sauvegarde n'existe encore dans cette table. Ajoute ou modifie un coach en mode édition pour enregistrer les données.")
+            except requests.RequestException as exc:
+                st.error(f"Connexion Supabase en échec : {exc}")
+        if st.button("🔄 Recharger depuis Supabase"):
+            try:
+                st.session_state.data=load_remote()
+                st.rerun()
+            except requests.RequestException as exc:
+                st.error(f"Impossible de recharger : {exc}")
     else:
-        st.warning("Sauvegarde temporaire uniquement : les données peuvent disparaître et ne sont pas partagées entre visiteurs.")
+        st.error("Sauvegarde distante désactivée : " + SECRET_WARNING)
+        st.warning("Les modifications restent uniquement dans la session Streamlit et peuvent disparaître.")
     st.caption("Ne pas saisir de données réelles de mineurs avant sécurisation des accès.")
+
+if not REMOTE:
+    st.warning("⚠️ Aucune sauvegarde permanente n’est active. " + SECRET_WARNING)
 
 def commit(updated):
     if not st.session_state.editor:
@@ -405,4 +441,4 @@ with tab_manage:
                 commit(updated)
 
 st.divider()
-st.caption("Prototype édition simple · Données fictives initiales. Sans Supabase, les saisies ne sont ni pérennes ni partagées. Protéger l'accès et les données avant utilisation réelle avec des mineurs.")
+st.caption("Azur Physique · Fiches initialement vides. La sauvegarde partagée exige Supabase ; protéger les accès avant utilisation réelle avec des mineurs.")
