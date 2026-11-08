@@ -31,18 +31,13 @@ h1,h2,h3,h4,h5,p,label,small,[data-testid="stMarkdownContainer"],[data-testid="s
 @media(max-width:640px){.block-container{padding-left:.75rem;padding-right:.75rem}.hero{padding:18px}}
 </style>''', unsafe_allow_html=True)
 
-DEMO = {
-    "schema_version": 4,
+EMPTY_DATA = {
+    "schema_version": 5,
     "club": "Azur Tennis Club d’Asnières",
     "season": "2026–2027",
-    "coaches": [{"id":"c1", "first_name":"Thomas", "last_name":"Martin", "photo":""}],
+    "coaches": [],
     "indices_names": ["Régularité", "Précision", "Intensité"],
-    "players": [
-        {"id":"p1","coach_id":"c1","first_name":"Léo","last_name":"Bernard","age":13,"category":"U14","presence":[1,1,0,1,1,1,1,0],"cmj":[{"date":"2026-09-03","value":27},{"date":"2026-10-03","value":30},{"date":"2026-11-03","value":33}],"indices":[78,71,82],"goals":[{"id":"g1","name":"Régularité à l'échange","progress":65},{"id":"g2","name":"Service","progress":45},{"id":"g3","name":"Déplacement","progress":80}]},
-        {"id":"p2","coach_id":"c1","first_name":"Inès","last_name":"Petit","age":14,"category":"U16","presence":[1,1,1,1,1,0,1,1],"cmj":[{"date":"2026-09-03","value":24},{"date":"2026-10-03","value":27},{"date":"2026-11-03","value":30}],"indices":[85,89,74],"goals":[{"id":"g4","name":"Retour de service","progress":75},{"id":"g5","name":"Précision","progress":60}]},
-        {"id":"p3","coach_id":"c1","first_name":"Noah","last_name":"Martin","age":12,"category":"U14","presence":[0,1,1,1,0,1,1,1],"cmj":[{"date":"2026-09-03","value":22},{"date":"2026-10-03","value":24},{"date":"2026-11-03","value":27}],"indices":[67,75,80],"goals":[]},
-        {"id":"p4","coach_id":"c1","first_name":"Emma","last_name":"Laurent","age":15,"category":"U16","presence":[1]*8,"cmj":[{"date":"2026-09-03","value":28},{"date":"2026-10-03","value":31},{"date":"2026-11-03","value":32}],"indices":[88,80,76],"goals":[]}
-    ]
+    "players": [],
 }
 
 def get_secret(name):
@@ -58,17 +53,18 @@ API=f"{SUPA_URL}/rest/v1/tennis_dashboard_state"
 HEADERS={"apikey":SUPA_KEY,"Authorization":f"Bearer {SUPA_KEY}","Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=minimal"}
 
 def migrate(raw):
-    """Récupère les données V3 sans effacer joueurs, présences, tests ni indices."""
-    data=copy.deepcopy(raw if isinstance(raw,dict) else DEMO)
+    """Conserve les éventuelles données déjà enregistrées lors d'une mise à jour."""
+    data=copy.deepcopy(raw if isinstance(raw,dict) else EMPTY_DATA)
     if "coaches" not in data:
         old=data.pop("coach", {})
-        data["coaches"]=[{"id":"c1","first_name":old.get("first_name","Coach"),"last_name":old.get("last_name",""),"photo":old.get("photo","")}]
-        data.setdefault("club",old.get("club",DEMO["club"]))
-        data.setdefault("season",old.get("season",DEMO["season"]))
+        data["coaches"]=[{"id":"c1","first_name":old.get("first_name",""),"last_name":old.get("last_name",""),"photo":old.get("photo","")}] if old.get("first_name", "").strip() else []
+        data.setdefault("club",old.get("club",EMPTY_DATA["club"]))
+        data.setdefault("season",old.get("season",EMPTY_DATA["season"]))
         for p in data.get("players",[]): p.setdefault("coach_id","c1")
-    data.setdefault("club",DEMO["club"])
-    data.setdefault("season",DEMO["season"])
-    data.setdefault("indices_names",DEMO["indices_names"])
+    data.setdefault("club",EMPTY_DATA["club"])
+    data.setdefault("season",EMPTY_DATA["season"])
+    data.setdefault("indices_names",EMPTY_DATA["indices_names"])
+    data.setdefault("coaches",[])
     data.setdefault("players",[])
     for p in data["players"]:
         p.setdefault("coach_id",None)
@@ -76,21 +72,21 @@ def migrate(raw):
         p.setdefault("presence",[])
         p.setdefault("cmj",[])
         p.setdefault("indices",[0,0,0])
-    data["schema_version"]=4
+    data["schema_version"]=5
     return data
 
 def load_remote():
     r=requests.get(API,headers=HEADERS,params={"id":"eq.main","select":"content"},timeout=12)
     r.raise_for_status()
     entries=r.json()
-    return migrate(entries[0]["content"] if entries else DEMO)
+    return migrate(entries[0]["content"] if entries else EMPTY_DATA)
 
 def save_remote(data):
     r=requests.post(API,headers=HEADERS,json={"id":"main","content":data},timeout=12)
     r.raise_for_status()
 
 if "data" not in st.session_state:
-    try: st.session_state.data=load_remote() if REMOTE else migrate(DEMO)
+    try: st.session_state.data=load_remote() if REMOTE else migrate(EMPTY_DATA)
     except requests.RequestException as e:
         st.error(f"Impossible de charger les données : {e}")
         st.stop()
@@ -214,7 +210,8 @@ else:
 st.markdown('<div class="hero"><small>VUE D’ENSEMBLE</small><h2>Suivi de mon groupe 🎾</h2><p>Entraîneurs, joueurs, présences, CMJ et indices tennis.</p></div>',unsafe_allow_html=True)
 a,b,c=st.columns(3)
 a.metric("Joueurs",len(group))
-b.metric("Présences",f"{round(sum(percent(p) for p in group)/len(group)) if group else 0}%")
+tracked=[p for p in group if p.get("presence")]
+b.metric("Présences",f"{round(sum(percent(p) for p in tracked)/len(tracked))}%" if tracked else "—")
 cmjs=[cmj(p) for p in group if cmj(p) is not None]
 c.metric("CMJ moyen",f"{sum(cmjs)/len(cmjs):.1f} cm" if cmjs else "—")
 
@@ -228,8 +225,8 @@ with tab_players:
             x,y=st.columns([3,1],vertical_alignment="center")
             with x:
                 st.markdown(f"**🎾 {name(p)}**")
-                st.caption(f"{p.get('category','')} · {p.get('age','—')} ans · {coach_name(p.get('coach_id'),coaches)}")
-                st.caption(f"Présences : {percent(p)} %")
+                st.caption(f"{p.get('category') or 'Catégorie non renseignée'} · {str(p.get('age')) + ' ans' if p.get('age') else 'Âge non renseigné'} · {coach_name(p.get('coach_id'),coaches)}")
+                st.caption(f"Présences : {percent(p)} %" if p.get("presence") else "Présences : aucune séance enregistrée")
             with y: st.metric("CMJ",f"{cmj(p)} cm" if cmj(p) is not None else "—")
 
 with tab_player:
@@ -243,7 +240,7 @@ with tab_player:
         st.caption(f"{p.get('category','')} · Coach : {coach_name(p.get('coach_id'),coaches)}")
         tatt,tcmj,tindices=st.tabs(["📅 Présences","📊 CMJ","🎾 Tennis"])
         with tatt:
-            st.metric("Présences aux séances physiques",f"{percent(p)} %")
+            st.metric("Présences aux séances physiques",f"{percent(p)} %" if p.get("presence") else "—")
             if st.session_state.editor:
                 with st.form(f"att_{chosen}"):
                     v=p.get("presence",[])
@@ -275,7 +272,7 @@ with tab_player:
             if st.session_state.editor:
                 with st.form(f"add_cmj_{chosen}"):
                     testdate=st.date_input("Date du test",value=date.today())
-                    height=st.number_input("CMJ en cm",min_value=0.0,max_value=100.0,value=30.0,step=0.5)
+                    height=st.number_input("CMJ en cm",min_value=0.0,max_value=100.0,value=0.0,step=0.5)
                     if st.form_submit_button("Ajouter le CMJ"):
                         updated=copy.deepcopy(D)
                         target=edit_record(updated,"players",chosen)
@@ -333,6 +330,18 @@ with tab_manage:
                                 if remove_photo: target["photo"]=""
                                 elif blob is not None: target["photo"]=blob
                                 commit(updated)
+                    st.markdown("**Supprimer cet entraîneur**")
+                    st.caption("Ses joueurs et leurs données sont conservés et deviennent non attribués.")
+                    confirm_key=f"confirm_coach_delete_{coach['id']}"
+                    confirmed=st.checkbox("Je confirme la suppression de cet entraîneur",key=confirm_key)
+                    if st.button("🗑️ Supprimer cet entraîneur",key=f"delete_coach_{coach['id']}",disabled=not confirmed):
+                        updated=copy.deepcopy(D)
+                        updated["coaches"]=[c for c in updated["coaches"] if c["id"]!=coach["id"]]
+                        for player in updated["players"]:
+                            if player.get("coach_id")==coach["id"]:
+                                player["coach_id"]=None
+                        # Après le rerun, le choix du coach est corrigé en amont du selectbox.
+                        commit(updated)
         st.divider()
         st.subheader("🎾 Joueurs")
         st.caption("Ajoute un joueur, puis affecte-le à un entraîneur. Ses résultats restent dans sa fiche.")
@@ -341,14 +350,14 @@ with tab_manage:
             with st.form("player_add",clear_on_submit=True):
                 first=st.text_input("Prénom du joueur")
                 last=st.text_input("Nom du joueur")
-                age=st.number_input("Âge",5,99,13)
-                category=st.text_input("Catégorie / classement",value="U14")
+                age=st.number_input("Âge (0 si non renseigné)",min_value=0,max_value=99,value=0)
+                category=st.text_input("Catégorie / classement",value="")
                 coach_id=st.selectbox("Entraîneur référent",list(opts),format_func=lambda k:opts[k])
                 if st.form_submit_button("Ajouter le joueur"):
                     if not first.strip(): st.error("Le prénom est obligatoire")
                     else:
                         updated=copy.deepcopy(D)
-                        updated["players"].append({"id":uuid.uuid4().hex,"coach_id":coach_id or None,"first_name":first.strip(),"last_name":last.strip(),"age":int(age),"category":category.strip(),"presence":[False]*8,"cmj":[],"indices":[0,0,0],"goals":[]})
+                        updated["players"].append({"id":uuid.uuid4().hex,"coach_id":coach_id or None,"first_name":first.strip(),"last_name":last.strip(),"age":int(age),"category":category.strip(),"presence":[],"cmj":[],"indices":[0,0,0],"goals":[]})
                         commit(updated)
         if players:
             player_ids={p["id"]:name(p) for p in players}
@@ -357,7 +366,7 @@ with tab_manage:
             with st.form(f"player_edit_{edit_id}"):
                 first=st.text_input("Prénom",value=ep["first_name"])
                 last=st.text_input("Nom",value=ep.get("last_name",""))
-                age=st.number_input("Âge du joueur",5,99,int(ep.get("age",13)))
+                age=st.number_input("Âge du joueur (0 si non renseigné)",min_value=0,max_value=99,value=int(ep.get("age") or 0))
                 category=st.text_input("Catégorie",value=ep.get("category",""))
                 existing=ep.get("coach_id") or ""
                 coach_id=st.selectbox("Attribuer à un coach",list(opts),index=list(opts).index(existing) if existing in opts else 0,format_func=lambda k:opts[k])
@@ -367,6 +376,23 @@ with tab_manage:
                         updated=copy.deepcopy(D)
                         edit_record(updated,"players",edit_id).update(first_name=first.strip(),last_name=last.strip(),age=int(age),category=category.strip(),coach_id=coach_id or None)
                         commit(updated)
+            st.markdown("**Supprimer ce joueur**")
+            st.caption("La suppression efface définitivement la fiche du joueur, ses présences, ses CMJ et ses indices tennis.")
+            confirm_key=f"confirm_player_delete_{edit_id}"
+            confirmed=st.checkbox("Je confirme la suppression de ce joueur et de ses résultats",key=confirm_key)
+            if st.button("🗑️ Supprimer ce joueur",key=f"delete_player_{edit_id}",disabled=not confirmed):
+                updated=copy.deepcopy(D)
+                updated["players"]=[p for p in updated["players"] if p["id"]!=edit_id]
+                commit(updated)
+        st.divider()
+        with st.expander("🧹 Remettre les listes de joueurs et de coachs à zéro"):
+            st.warning("Cette action supprime tous les entraîneurs et tous les joueurs, y compris leurs présences, CMJ et indices. Utilise-la uniquement si tu souhaites effacer les anciennes fiches de démonstration.")
+            confirm_all=st.checkbox("Je confirme la suppression de toutes les fiches",key="confirm_all_delete")
+            if st.button("Vider toutes les fiches",disabled=not confirm_all,type="secondary"):
+                updated=copy.deepcopy(D)
+                updated["coaches"]=[]
+                updated["players"]=[]
+                commit(updated)
         st.divider()
         st.subheader("⚙️ Paramètres")
         with st.form("settings"):
