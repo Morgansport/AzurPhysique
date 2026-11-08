@@ -1,8 +1,7 @@
-"""Azur Physique V4 — tableau de bord tennis multi-coachs et objectifs."""
+"""Azur Physique — interface bleue, gestion simple des coachs et joueurs."""
 import base64
 import copy
 import hmac
-import html
 import uuid
 from datetime import date
 
@@ -29,14 +28,7 @@ h1,h2,h3,h4,h5,p,label,small,[data-testid="stMarkdownContainer"],[data-testid="s
 .hero{border-radius:22px;background:linear-gradient(120deg,#073D79,#0874C3);padding:24px;margin:14px 0 18px;box-shadow:0 8px 22px #063F7820}
 .hero h2,.hero p,.hero small{color:#fff!important}.hero p{opacity:.95}
 .coach-note{font-size:.85rem;color:#526A83}
-.reservoirs{display:flex;gap:12px;justify-content:space-around;flex-wrap:wrap;margin:15px 0}
-.reservoir-card{width:30%;min-width:135px;background:white;border:1px solid #D2E2F0;border-radius:17px;padding:15px 8px 10px;text-align:center}
-.reservoir-shell{height:138px;width:60px;margin:8px auto;position:relative;background:#E6EFF7;border:2px solid #ABC5E1;border-radius:14px;overflow:hidden}
-.reservoir-fill{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(0deg,#0756A8,#43B0E6)}
-.reservoir-value{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:1.15rem;font-weight:900;color:#102033;text-shadow:0 0 5px #fff,0 0 5px #fff}
-.reservoir-title{font-weight:750;font-size:.85rem;overflow-wrap:anywhere;color:#102033}
-.reservoir-sub{font-size:.72rem;color:#4B6987}
-@media(max-width:640px){.block-container{padding-left:.75rem;padding-right:.75rem}.hero{padding:18px}.reservoir-card{min-width:94px;padding:10px 4px;width:31%}.reservoir-shell{height:110px;width:49px}.reservoir-title{font-size:.72rem}}
+@media(max-width:640px){.block-container{padding-left:.75rem;padding-right:.75rem}.hero{padding:18px}}
 </style>''', unsafe_allow_html=True)
 
 DEMO = {
@@ -176,16 +168,6 @@ def uploaded_photo(file):
         return False
     return base64.b64encode(file.getvalue()).decode("ascii")
 
-def reservoirs(goals):
-    if not goals:
-        st.info("Aucun objectif défini. Ajoute un objectif dans la section Gestion des objectifs.")
-        return
-    cards=[]
-    for g in goals:
-        p=max(0,min(100,int(g.get("progress",0))))
-        title=html.escape(g.get("name","Objectif"))
-        cards.append(f'<div class="reservoir-card"><div class="reservoir-title">{title}</div><div class="reservoir-shell"><div class="reservoir-fill" style="height:{p}%"></div><div class="reservoir-value">{p}%</div></div><div class="reservoir-sub">Objectif individuel</div></div>')
-    st.markdown('<div class="reservoirs">'+''.join(cards)+'</div>',unsafe_allow_html=True)
 
 D=st.session_state.data
 coaches=D["coaches"]
@@ -205,6 +187,23 @@ if coaches:
     with right:
         st.subheader(f"Bonjour, {active_coach['first_name']} 👋")
         st.caption(f"{D['club']} · Saison {D['season']}")
+    with st.popover("✏️ Modifier cet entraîneur", use_container_width=True):
+        if not st.session_state.editor:
+            st.info("Active le mode modification via le menu ☰.")
+        else:
+            with st.form(f"quick_coach_{selected_coach}"):
+                first=st.text_input("Prénom",value=active_coach["first_name"])
+                last=st.text_input("Nom",value=active_coach.get("last_name",""))
+                photo=st.file_uploader("Changer la photo (JPG / PNG, 1 Mo maximum)",type=["jpg","jpeg","png"],key=f"quick_photo_{selected_coach}")
+                if st.form_submit_button("Enregistrer le coach"):
+                    blob=uploaded_photo(photo)
+                    if not first.strip(): st.error("Le prénom est obligatoire.")
+                    elif blob is not False:
+                        updated=copy.deepcopy(D)
+                        target=edit_record(updated,"coaches",selected_coach)
+                        target.update(first_name=first.strip(),last_name=last.strip())
+                        if blob is not None: target["photo"]=blob
+                        commit(updated)
     scope=st.radio("Voir les joueurs",["Cet entraîneur","Tous les joueurs"],horizontal=True,label_visibility="collapsed")
     group=[p for p in players if p.get("coach_id")==selected_coach] if scope=="Cet entraîneur" else players
 else:
@@ -212,7 +211,7 @@ else:
     selected_coach=None
     group=players
 
-st.markdown('<div class="hero"><small>VUE D’ENSEMBLE</small><h2>Suivi de mon groupe 🎾</h2><p>Entraîneurs, joueurs, présences, CMJ, indices tennis et objectifs.</p></div>',unsafe_allow_html=True)
+st.markdown('<div class="hero"><small>VUE D’ENSEMBLE</small><h2>Suivi de mon groupe 🎾</h2><p>Entraîneurs, joueurs, présences, CMJ et indices tennis.</p></div>',unsafe_allow_html=True)
 a,b,c=st.columns(3)
 a.metric("Joueurs",len(group))
 b.metric("Présences",f"{round(sum(percent(p) for p in group)/len(group)) if group else 0}%")
@@ -230,7 +229,7 @@ with tab_players:
             with x:
                 st.markdown(f"**🎾 {name(p)}**")
                 st.caption(f"{p.get('category','')} · {p.get('age','—')} ans · {coach_name(p.get('coach_id'),coaches)}")
-                st.caption(f"Présences : {percent(p)} % · {len(p.get('goals',[]))} objectifs")
+                st.caption(f"Présences : {percent(p)} %")
             with y: st.metric("CMJ",f"{cmj(p)} cm" if cmj(p) is not None else "—")
 
 with tab_player:
@@ -242,43 +241,7 @@ with tab_player:
         p=edit_record(D,"players",chosen)
         st.subheader(name(p))
         st.caption(f"{p.get('category','')} · Coach : {coach_name(p.get('coach_id'),coaches)}")
-        tgoals,tatt,tcmj,tindices=st.tabs(["🎯 Objectifs","📅 Présences","📊 CMJ","🎾 Tennis"])
-        with tgoals:
-            st.subheader("Réservoirs de progression")
-            st.caption("Chaque réservoir représente le pourcentage de réalisation estimé par le coach, et non une mesure automatique.")
-            reservoirs(p.get("goals",[]))
-            if st.session_state.editor:
-                st.markdown("**Modifier les objectifs**")
-                for goal in p.get("goals",[]):
-                    with st.expander(goal.get("name","Objectif")):
-                        with st.form(f"goal_edit_{chosen}_{goal['id']}"):
-                            gn=st.text_input("Nom",value=goal.get("name",""))
-                            gp=st.slider("Progression (%)",0,100,int(goal.get("progress",0)))
-                            save=st.form_submit_button("Enregistrer l'objectif")
-                            if save:
-                                if gn.strip():
-                                    updated=copy.deepcopy(D)
-                                    g=next(x for x in edit_record(updated,"players",chosen)["goals"] if x["id"]==goal["id"])
-                                    g.update(name=gn.strip(),progress=gp)
-                                    commit(updated)
-                                else: st.error("Donne un nom à l'objectif.")
-                        if st.button("Supprimer cet objectif",key=f"ask_goal_{chosen}_{goal['id']}"):
-                            st.session_state[f"confirm_goal_{chosen}_{goal['id']}"]=True
-                        if st.session_state.get(f"confirm_goal_{chosen}_{goal['id']}"):
-                            st.warning("Confirmer la suppression de cet objectif ?")
-                            if st.button("Oui, supprimer",key=f"delete_goal_{chosen}_{goal['id']}"):
-                                updated=copy.deepcopy(D)
-                                edit_record(updated,"players",chosen)["goals"]=[x for x in p["goals"] if x["id"]!=goal["id"]]
-                                commit(updated)
-                with st.form(f"add_goal_{chosen}",clear_on_submit=True):
-                    gn=st.text_input("Nouvel objectif (ex. 70 % de premières balles)")
-                    gp=st.slider("Pourcentage initial",0,100,0)
-                    if st.form_submit_button("➕ Ajouter cet objectif"):
-                        if not gn.strip(): st.error("Indique un objectif.")
-                        else:
-                            updated=copy.deepcopy(D)
-                            edit_record(updated,"players",chosen)["goals"].append({"id":uuid.uuid4().hex,"name":gn.strip(),"progress":gp})
-                            commit(updated)
+        tatt,tcmj,tindices=st.tabs(["📅 Présences","📊 CMJ","🎾 Tennis"])
         with tatt:
             st.metric("Présences aux séances physiques",f"{percent(p)} %")
             if st.session_state.editor:
@@ -339,6 +302,7 @@ with tab_manage:
         st.info("Active le mode modification dans le menu ☰ pour gérer les entraîneurs et les joueurs.")
     else:
         st.subheader("🏅 Entraîneurs")
+        st.caption("Ajoute un coach ou ouvre son profil pour modifier son prénom, son nom ou sa photo.")
         with st.expander("➕ Ajouter un entraîneur",expanded=not bool(coaches)):
             with st.form("coach_add",clear_on_submit=True):
                 first=st.text_input("Prénom du coach")
@@ -369,21 +333,9 @@ with tab_manage:
                                 if remove_photo: target["photo"]=""
                                 elif blob is not None: target["photo"]=blob
                                 commit(updated)
-                    attached=sum(p.get("coach_id")==coach["id"] for p in players)
-                    st.caption(f"{attached} joueur(s) attribué(s). En supprimant ce coach, ses joueurs deviennent non attribués : aucune fiche n'est effacée.")
-                    if st.button("Demander la suppression du coach",key=f"ask_coach_{coach['id']}"):
-                        st.session_state[f"confirm_coach_{coach['id']}"]=True
-                    if st.session_state.get(f"confirm_coach_{coach['id']}"):
-                        st.warning(f"Suppression définitive du coach {name(coach)}. Confirmer ?")
-                        if st.button("Oui, supprimer ce coach",key=f"delete_coach_{coach['id']}"):
-                            updated=copy.deepcopy(D)
-                            updated["coaches"]=[c for c in coaches if c["id"]!=coach["id"]]
-                            for player in updated["players"]:
-                                if player.get("coach_id")==coach["id"]: player["coach_id"]=None
-                            st.session_state.pop("selected_coach",None)
-                            commit(updated)
         st.divider()
         st.subheader("🎾 Joueurs")
+        st.caption("Ajoute un joueur, puis affecte-le à un entraîneur. Ses résultats restent dans sa fiche.")
         opts={"": "Non attribué",**{c["id"]:name(c) for c in coaches}}
         with st.expander("➕ Ajouter un joueur"):
             with st.form("player_add",clear_on_submit=True):
@@ -415,14 +367,6 @@ with tab_manage:
                         updated=copy.deepcopy(D)
                         edit_record(updated,"players",edit_id).update(first_name=first.strip(),last_name=last.strip(),age=int(age),category=category.strip(),coach_id=coach_id or None)
                         commit(updated)
-            if st.button("Demander la suppression du joueur",key=f"ask_player_{edit_id}"):
-                st.session_state[f"confirm_player_{edit_id}"]=True
-            if st.session_state.get(f"confirm_player_{edit_id}"):
-                st.error("Attention : cela efface aussi ses présences, tests CMJ, indices et objectifs enregistrés.")
-                if st.button("Oui, supprimer définitivement ce joueur",key=f"delete_player_{edit_id}"):
-                    updated=copy.deepcopy(D)
-                    updated["players"]=[p for p in players if p["id"]!=edit_id]
-                    commit(updated)
         st.divider()
         st.subheader("⚙️ Paramètres")
         with st.form("settings"):
@@ -435,4 +379,4 @@ with tab_manage:
                 commit(updated)
 
 st.divider()
-st.caption("Prototype V4 · Données fictives initiales. Sans Supabase, les saisies ne sont ni pérennes ni partagées. Protéger l'accès et les données avant utilisation réelle avec des mineurs.")
+st.caption("Prototype édition simple · Données fictives initiales. Sans Supabase, les saisies ne sont ni pérennes ni partagées. Protéger l'accès et les données avant utilisation réelle avec des mineurs.")
